@@ -20,37 +20,65 @@ namespace Functions
             [OrchestrationClient]DurableOrchestrationClient client,
             TraceWriter log)
         {
-            var personObj = Newtonsoft.Json.JsonConvert.DeserializeObject<Person>(await req.Content.ReadAsStringAsync());
-            var orchestrationInstanceId = await client.StartNewAsync(@"Start", req);
+            var body = await req.Content.ReadAsStringAsync();
+            var personObj = Newtonsoft.Json.JsonConvert.DeserializeObject<Person>(body);
+            log.Info($@"Person request received: 
+{body}");
+            var orchestrationInstanceId = await client.StartNewAsync(@"Start", personObj);
 
-            return await client.WaitForCompletionOrCreateCheckStatusResponseAsync(req, orchestrationInstanceId);
+            return client.CreateCheckStatusResponse(req, orchestrationInstanceId);
         }
 
-        [FunctionName(nameof(StartAsync))]
-        public static async Task<IList<Error>> StartAsync([OrchestrationTrigger]DurableOrchestrationContext context)
+        [FunctionName(nameof(Start))]
+        public static async Task<IList<Error>> Start([OrchestrationTrigger]DurableOrchestrationContext context)
         {
             var person = context.GetInput<Person>();
-            var firstNameError = await context.CallActivityAsync<Error>(nameof(CheckFirstName), person);
 
-            return new[] { firstNameError };
+            var chainedInputOutput = await context.CallActivityAsync<InputOutput>(nameof(CheckFirstName), person);
+            chainedInputOutput = await context.CallActivityAsync<InputOutput>(nameof(CheckLastName), chainedInputOutput);
+
+            return chainedInputOutput.Output;
         }
 
-        [FunctionName("CheckFirstName")]
-        public static Error CheckFirstName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
+        public class InputOutput
         {
+            public IList<Error> Output { get; set; } = new Error[0];
+
+            public Person Input { get; set; }
+        }
+
+        [FunctionName(nameof(CheckFirstName))]
+        public static async Task<InputOutput> CheckFirstName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
+        {
+            await Task.Delay(1300);
             var person = context.GetInput<Person>();
             log.Info($@"Message received: {context.InstanceId}");
             if ((person?.Name?.First?.Length > 1) == false)
             {
                 var err = new Error { id = 1, message = "First name is null or not longer than 1 character" };
                 log.Info($@" - Error found: {err.message}");
-                return err;
+                return new InputOutput { Output = new[] { err }, Input = person };
             }
             else
             {
                 log.Info($@" - No error found");
-                return null;
+                return new InputOutput { Input = person };
             }
+        }
+
+        [FunctionName(nameof(CheckLastName))]
+        public static async Task<InputOutput> CheckLastName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
+        {
+            await Task.Delay(1400);
+
+            var io = context.GetInput<InputOutput>();
+            if ((io?.Input?.Name?.Last?.Length > 1) == false)
+            {
+                io.Output.Add(new Error { id = 2, message = "Last name is null or not longer than 1 character" });
+
+            }
+
+            return io;
         }
 
         //[FunctionName("GetResult")]
@@ -117,18 +145,6 @@ namespace Functions
         //    if (!string.IsNullOrEmpty(req?.Address?.Line2) && string.IsNullOrEmpty(req?.Address?.Line1))
         //    {
         //        return new OkObjectResult(new Error { id = 3, message = "Address line 2 is populated but line 1 is empty" });
-        //    }
-
-        //    return new NoContentResult();
-        //}
-
-        //[FunctionName("CheckLastName")]
-        //public static async Task<IActionResult> CheckLastName([HttpTrigger(AuthorizationLevel.Function, "post", Route = null)]Person req)
-        //{
-        //    await Task.Delay(1400);
-        //    if ((req?.Name?.Last?.Length > 1) == false)
-        //    {
-        //        return new OkObjectResult(new Error { id = 2, message = "Last name is null or not longer than 1 character" });
         //    }
 
         //    return new NoContentResult();
