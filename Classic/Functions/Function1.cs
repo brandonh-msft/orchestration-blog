@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs;
@@ -34,21 +35,19 @@ namespace Functions
         {
             var person = context.GetInput<Person>();
 
-            var chainedInputOutput = await context.CallActivityAsync<InputOutput>(nameof(CheckFirstName), person);
-            chainedInputOutput = await context.CallActivityAsync<InputOutput>(nameof(CheckLastName), chainedInputOutput);
+            var tasks = new[]
+            {
+                context.CallActivityAsync<Error>(nameof(CheckFirstName), person),
+                context.CallActivityAsync<Error>(nameof(CheckLastName), person)
+            };
 
-            return chainedInputOutput.Output;
-        }
+            var errors = await Task.WhenAll(tasks);
 
-        public class InputOutput
-        {
-            public IList<Error> Output { get; set; } = new Error[0];
-
-            public Person Input { get; set; }
+            return errors.Where(e => e != null).ToList();
         }
 
         [FunctionName(nameof(CheckFirstName))]
-        public static async Task<InputOutput> CheckFirstName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
+        public static async Task<Error> CheckFirstName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
         {
             await Task.Delay(1300);
             var person = context.GetInput<Person>();
@@ -57,28 +56,28 @@ namespace Functions
             {
                 var err = new Error { id = 1, message = "First name is null or not longer than 1 character" };
                 log.Info($@" - Error found: {err.message}");
-                return new InputOutput { Output = new[] { err }, Input = person };
+                return err;
             }
-            else
-            {
-                log.Info($@" - No error found");
-                return new InputOutput { Input = person };
-            }
+
+            log.Info($@" - No error found");
+            return null;
         }
 
         [FunctionName(nameof(CheckLastName))]
-        public static async Task<InputOutput> CheckLastName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
+        public static async Task<Error> CheckLastName([ActivityTrigger]DurableActivityContext context, TraceWriter log)
         {
             await Task.Delay(1400);
 
-            var io = context.GetInput<InputOutput>();
-            if ((io?.Input?.Name?.Last?.Length > 1) == false)
+            var person = context.GetInput<Person>();
+            if ((person?.Name?.Last?.Length > 1) == false)
             {
-                io.Output.Add(new Error { id = 2, message = "Last name is null or not longer than 1 character" });
-
+                var err = new Error { id = 2, message = "Last name is null or not longer than 1 character" };
+                log.Info($@" - Error found: {err.message}");
+                return err;
             }
 
-            return io;
+            log.Info($@" - No error found");
+            return null;
         }
 
         //[FunctionName("GetResult")]
